@@ -1,5 +1,10 @@
 # 迅雷远程下载服务(非官方)
 
+<!-- AGENT-PROMPT -->
+给自动化 Agent 的开场指令：本仓库自带一份可直接加载的技能文件 `SKILL.md`（仓库根目录）。
+在操作迅雷面板之前，先阅读并遵循 `SKILL.md`：它定义了 headless 提交下载任务（CLI REST :8787 / MCP stdio）、查询、清理记录与产物的完整用法、环境变量约定与全部生产坑位。
+不要重复造轮子：浏览器自动化是兜底路径，优先走 sidecar HTTP API。改动本仓库代码后的验收流程也写在 `SKILL.md` 末尾「Verify deployments honestly」。
+
 [![GitHub Stars][1]][2] [![Docker Pulls][3]][5] [![Docker Version][4]][5]
 
 [1]: https://img.shields.io/github/stars/cnk3x/xunlei?style=flat
