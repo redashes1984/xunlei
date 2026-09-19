@@ -88,7 +88,8 @@ def api(path, body=None, timeout=30, method=None):
             method=method or ("POST" if data is not None else "GET"))
         try:
             with urllib.request.urlopen(req, timeout=timeout) as r:
-                return json.loads(r.read().decode())
+                d = json.loads(r.read().decode())
+                return d if isinstance(d, dict) else {}
         except Exception:
             # Panel restart rotates its embedded JWT: drop the cached token
             # once so a long-lived serve process self-heals without restart.
@@ -174,20 +175,26 @@ def cleanup(ids=None, with_files=True, limit=50):
     removed = []
     for t in done:
         s = summary(t)
-        if with_files and s.get("path"):
-            rel = s["path"]
-            rel = rel[len("/downloads/"):] if rel.startswith("/downloads/") else rel.lstrip("/")
-            full = os.path.join(_artifact_root(), rel)
-            try:
-                if os.path.isdir(full):
-                    import shutil
-                    shutil.rmtree(full)
-                elif os.path.exists(full):
-                    os.remove(full)
-            except Exception as e:
-                print("artifact delete skipped:", full, e, file=sys.stderr)
-        remove_tasks([s["id"]])
-        removed.append(s)
+        try:
+            if with_files and s.get("path"):
+                rel = s["path"]
+                rel = rel[len("/downloads/"):] if rel.startswith("/downloads/") else rel.lstrip("/")
+                # normalize: drop empty/"." segments, reject ".." traversal
+                parts = [p for p in rel.split("/") if p not in ("", ".", "..")]
+                full = os.path.join(_artifact_root(), *parts) if parts else None
+                if full:
+                    try:
+                        if os.path.isdir(full):
+                            import shutil
+                            shutil.rmtree(full)
+                        elif os.path.exists(full):
+                            os.remove(full)
+                    except Exception as e:
+                        print("artifact delete skipped:", full, e, file=sys.stderr)
+            remove_tasks([s["id"]])
+            removed.append(s)
+        except Exception as e:
+            print("remove failed for", s.get("id"), ":", e, file=sys.stderr)
     return removed
 
 
@@ -296,10 +303,12 @@ def mcp_server():
                 {"name": "remove_task", "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "ids": {"type": "array", "items": {"type": "string"}},
-                        "keep_files": {"type": "boolean", "default": False}},
-                    "required": ["ids"]},
-                 "description": "Delete task records; keep_files=false (default) also removes downloaded artifacts on disk."},
+                        "ids": {"type": "array", "items": {"type": "string"},
+                                "description": "Task ids to delete; omit or pass [] to clean the whole recent listing."},
+                        "keep_files": {"type": "boolean", "default": False},
+                        "limit": {"type": "integer", "default": 50}},
+                    },
+                 "description": "Delete task records; keep_files=false (default) also removes downloaded artifacts. ids=[] equals omitted ids: cleans recent listing up to `limit`."},
             ]}})
         elif method == "tools/call":
             name = req.get("params", {}).get("name")
@@ -396,8 +405,14 @@ def serve(host="0.0.0.0", port=None):
                 return self._json(401, {"error": "bad X-API-KEY"})
             q = urllib.parse.urlparse(self.path)
             if q.path == "/api/v1/tasks":
+                pq = urllib.parse.parse_qs(q.query)
                 try:
-                    out = cleanup(limit=int((urllib.parse.parse_qs(q.query).get("limit") or ["50"])[0]))
+                    limit = int((pq.get("limit") or ["50"])[0])
+                except ValueError:
+                    limit = 50
+                keep = (pq.get("keep_files") or ["0"])[0] != "1"
+                try:
+                    out = cleanup(limit=limit, with_files=keep)
                     return self._json(200, {"removed": out})
                 except Exception as e:
                     return self._json(500, {"error": str(e)})
@@ -491,11 +506,17 @@ def cli(argv):
         print(json.dumps({"summary": s, "task": done}, ensure_ascii=False, indent=1))
     elif cmd == "remove":
         keep = "--keep-files" in rest
-        ids = [a for a in rest if not a.startswith("--")]
+        lim = 50
+        if "--limit" in rest:
+            try:
+                lim = int(rest[rest.index("--limit") + 1])
+            except (IndexError, ValueError):
+                pass
+        ids = [a for a in rest if not a.startswith("--") and a != str(lim)]
         if ids:
             out = cleanup(ids=ids, with_files=not keep)
         else:
-            out = cleanup(with_files=not keep)
+            out = cleanup(with_files=not keep, limit=lim)
         print(json.dumps({"removed": out}, ensure_ascii=False, indent=1))
     else:
         print("unknown command:", cmd)

@@ -295,9 +295,10 @@ curl -s -X DELETE http://127.0.0.1:8787/api/v1/tasks/VP1vAoajw3cYB24N5bv5U8ydA1
 ### `DELETE /api/v1/tasks?limit=N`
 Bulk cleanup of the recent listing (default 50): every listed task gets the
 same record+artifact removal applied. Intended for housekeeping after a batch
-pipeline drained the queue.
+pipeline drained the queue. Supports `?keep_files=1` like the single-id route.
 ```bash
 curl -s -X DELETE 'http://127.0.0.1:8787/api/v1/tasks?limit=20'
+curl -s -X DELETE 'http://127.0.0.1:8787/api/v1/tasks?limit=20&keep_files=1'
 ```
 
 ### Completion reporting for agents
