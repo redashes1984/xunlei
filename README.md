@@ -144,3 +144,203 @@ services:
       # 可选，首次初始化，会从远程下载迅雷套件到此处，如果不配置每次重新创建都会重新从远程下载
       - ./cache:/xunlei/var/packages/pan-xunlei-com
 ```
+
+# xlmcp — Headless bridge for the cnk3x/xunlei Docker panel
+
+Zero-dependency Python 3 sidecar (stdlib only) that drives the
+[cnk3x/xunlei](https://github.com/cnk3x/xunlei) Docker panel without a browser.
+Three surfaces: **CLI**, **Komga-style REST**, **MCP stdio server**.
+
+The panel (`http://<host>:2345/webman/3rdparty/pan-xunlei-com/index.cgi`)
+normally needs a browser SPA session. xlmcp reproduces its auth chain directly:
+
+1. `GET /webman/login.cgi?enable_syno_token=yes` with Basic auth → `SynoToken`
+2. `GET <panel>/` → scrape the embedded JWT from the HTML
+3. Call CGI paths directly with headers `pan-auth: <jwt>` + `x-syno-token` + Basic
+
+> Note: the `device/v1/fetch` proxy enforces a URL allowlist and rejects most
+> absolute URLs ("url not allowed") — bypass it and hit relative CGI paths directly.
+
+## Requirements
+
+- Python ≥ 3.8 (stdlib only; no pip installs)
+- A running cnk3x/xunlei container
+
+## Configuration (environment variables)
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `XL_URL` | Full panel base URL. Highest priority — overrides HOST/PORT entirely. | — |
+| `XL_HOST` | Panel host only (used when `XL_URL` unset). | `10.10.4.21` |
+| `XL_PORT` | Panel port only (used when `XL_URL` unset). | `2345` |
+| `XL_USER` | Panel Basic-auth username. | `bdm965` |
+| `XL_PASS` | Panel Basic-auth password. | `189810bdm` |
+| `XL_API_PORT` | REST listen port for `serve`. | `8787` |
+| `XL_API_KEY` | Shared secret for the REST front (checked against `X-API-KEY` header). Empty ⇒ auth off. | `""` |
+
+Base URL resolution: `XL_URL` > `XL_HOST`/`XL_PORT`. If neither set:
+`http://10.10.4.21:2345/webman/3rdparty/pan-xunlei-com/index.cgi`.
+
+## CLI
+
+```bash
+# device readiness (prints {"ready": true, "about": {...}})
+python3 xlmcp.py status
+
+# recent download tasks
+python3 xlmcp.py list --limit 20
+
+# submit a download, wait until COMPLETE/ERROR (default deadline 600s)
+python3 xlmcp.py add https://example.com/file.zip --name mypack
+
+# fire-and-forget: return immediately with the task id
+python3 xlmcp.py add https://example.com/file.zip --no-wait
+
+# push the result JSON to a callback endpoint when the task reaches a terminal state
+python3 xlmcp.py add https://example.com/file.zip --callback http://127.0.0.1:9911/done --deadline 300
+
+# REST front (see below), bind address override:
+python3 xlmcp.py serve --host 0.0.0.0
+
+# MCP stdio server (see below)
+python3 xlmcp.py --mcp
+
+# help
+python3 xlmcp.py help
+```
+
+`add` options: `--name NAME` (file/stem name; default = last URL path segment
+minus query), `--callback URL`, `--deadline SEC` (default 600), `--no-wait`.
+
+On success the CLI prints a compact summary — branch on `ok`:
+
+```json
+{
+ "summary": {"id": "VP1v...", "name": "mypack", "phase": "PHASE_TYPE_COMPLETE",
+             "ok": true, "message": "完成", "path": "/downloads/mypack", "size": "16958"},
+ "task": {...full Thunder task object...}
+}
+```
+
+With `--no-wait` only `{"summary": {"id": ..., "phase": "submitted"}}` is printed.
+
+## REST API
+
+Start the server: `python3 xlmcp.py serve` (binds `XL_API_PORT`, default 8787).
+When `XL_API_KEY` is set, every request must carry `X-API-KEY: <key>`; empty
+key means auth off (banner announces `auth=off` at startup).
+
+### `GET /health`
+Liveness + panel readiness.
+```bash
+curl -s http://127.0.0.1:8787/health
+# {"ok": true, "ready": true, "about": {"kind": "drive#about", ...}}
+```
+
+### `GET /api/v1/tasks?limit=N`
+List recent download tasks (Thunder `drive#task` objects). Invalid `limit`
+falls back to 50 rather than dropping the connection.
+```bash
+curl -s 'http://127.0.0.1:8787/api/v1/tasks?limit=20'
+```
+
+### `GET /api/v1/tasks/{id}`
+Fetch one task by id. Lookup scans the most recent listed window only — ids
+are not durable once a task ages out. Returns `{}` when not found.
+```bash
+curl -s http://127.0.0.1:8787/api/v1/tasks/VP1vAoajw3cYB24N5bv5U8ydA1
+```
+
+### `POST /api/v1/tasks`
+Submit a download. Blocks until COMPLETE/ERROR by default; returns
+`{"summary": {...}, "task": {...}}`.
+
+Body fields — `url` (required); optional `name`, `callback`, `deadline`
+(seconds, default 600), `no_wait` (bool):
+```bash
+curl -s -X POST http://127.0.0.1:8787/api/v1/tasks \
+  -H 'Content-Type: application/json' \
+  -d '{"url":"https://www.baidu.com/favicon.ico","name":"probe"}'
+
+# asynchronous: don't hold the HTTP connection — the summary JSON is POSTed
+# to `callback` when the task finishes
+curl -s -X POST http://127.0.0.1:8787/api/v1/tasks \
+  -H 'Content-Type: application/json' \
+  -d '{"url":"https://…/file.zip","callback":"http://collector:9911/done","deadline":900}'
+
+# fire-and-forget
+curl -s -X POST http://127.0.0.1:8787/api/v1/tasks \
+  -H 'Content-Type: application/json' \
+  -d '{"url":"https://…/file.zip","no_wait":true}'
+```
+
+Errors are JSON: `500 {"error": "…"}`, `502` on failed `/health` probe,
+`401 {"error":"bad X-API-KEY"}` when the key is wrong, `404` on unknown routes.
+
+### Completion reporting for agents
+Two mechanisms, pick one:
+1. **Sync** — keep the POST open; read `summary.ok` (`true` ⇔
+   `phase == PHASE_TYPE_COMPLETE`) when it returns. Typical latency for a
+   small file: ≈6 s.
+2. **Async callback** — set `"callback":"http://…"`. The sidecar POSTs the
+   summary JSON (`{id,name,phase,ok,message,path,size}`) to that URL once the
+   task reaches a terminal state, best-effort (failures logged to stderr).
+   On timeout the summary carries `"phase":"TIMEOUT"`.
+
+### Running as a service
+Example systemd unit:
+```ini
+[Unit]
+Description=xlmcp Thunder bridge
+After=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 /root/xl-mcp/xlmcp.py serve
+Environment=XL_HOST=10.10.4.21 XL_PORT=2345 XL_API_KEY=
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
+## MCP server
+
+Serve over stdio for any MCP-compatible agent host:
+
+```json
+{
+  "mcpServers": {
+    "xlmcp": { "command": "python3", "args": ["/root/xl-mcp/xlmcp.py", "--mcp"] }
+  }
+}
+```
+
+Implements `initialize`, `notifications/initialized`, `tools/list`,
+`tools/call`, ping-style fallback. Three tools:
+
+| Tool | Arguments | Behavior |
+|---|---|---|
+| `status` | — | Device readiness check. |
+| `list_tasks` | `{limit?: int=50}` | Recent tasks. |
+| `add_task` | `{url, name?, callback?, deadline?=600, no_wait?}` | Same semantics as REST POST: waits for COMPLETE/ERROR, returns `{summary, task}`; optional `callback` receives summary JSON via POST; `no_wait` returns `{summary:{id,phase:"submitted"}}`. |
+
+Quick smoke test:
+```bash
+echo '{"jsonrpc":"2.0","id":1,"method":"initialize"}' | python3 xlmcp.py --mcp
+echo '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' | python3 xlmcp.py --mcp
+echo '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"add_task","arguments":{"url":"https://www.baidu.com/favicon.ico","name":"mcp-probe"}}}' | python3 xlmcp.py --mcp
+```
+
+## Implementation notes
+
+- **Token cache self-healing**: JWT/SynoToken are cached per process; if the
+  panel rotates them (restart/redeploy), the next failing `api()` call drops
+  the cache and re-fetches once — long-lived `serve` processes recover without
+  a manual restart.
+- **Task visibility lag**: the empty-space Thunder listing lags minutes behind
+  new tasks; `task_by_id` therefore queries the runner-space-scoped listing
+  first (`space=device_id#…`), then falls back to the empty-space one. This is
+  what makes sync completion reports arrive in seconds instead of minutes.
+- **`params.target` pitfall**: must be the runner's real `device_id` (read from
+  a `user#runner` task's `params.target`). The literal `"downloads"` leaves
+  tasks stuck in `PHASE_TYPE_PENDING` forever.
