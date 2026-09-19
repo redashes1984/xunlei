@@ -154,7 +154,7 @@ services:
 
 零依赖 Python 3 sidecar（仅标准库），无需浏览器即可驱动
 [cnk3x/xunlei](https://github.com/cnk3x/xunlei) Docker 面板。
-三个使用面：**CLI**、**Komga 风格 REST**、**MCP stdio 服务器**。
+三个使用面：**CLI**、**REST API**、**MCP stdio 服务器**。
 
 面板（`http://<host>:2345/webman/3rdparty/pan-xunlei-com/index.cgi`）
 正常情况下需要一个浏览器 SPA 会话。xlmcp 直接复刻其鉴权链：
