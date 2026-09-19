@@ -20,9 +20,10 @@ Env for the panel endpoint:
 CLI:
   python3 xlmcp.py status
   python3 xlmcp.py list [--limit N]
-  python3 xlmcp.py add <url> [--name NAME] [--no-wait]
+  python3 xlmcp.py add <url> [--name NAME] [--no-wait] [--callback URL] [--deadline SEC]
+  python3 xlmcp.py remove [ID ...] [--keep-files]   # deletes task records (+downloaded files unless --keep-files); no ids = whole recent list
 MCP stdio:
-  python3 xlmcp.py --mcp    (tools: status, list_tasks, add_task)
+  python3 xlmcp.py --mcp    (tools: status, list_tasks, add_task, remove_task)
 """
 import base64
 import json
@@ -74,7 +75,7 @@ def tokens():
     return m.group(1), syn
 
 
-def api(path, body=None, timeout=30):
+def api(path, body=None, timeout=30, method=None):
     for attempt in (0, 1):
         jwt, syn = tokens()
         headers = {"pan-auth": jwt, "x-syno-token": syn, "Authorization": _BASIC}
@@ -82,7 +83,9 @@ def api(path, body=None, timeout=30):
         if body is not None:
             data = json.dumps(body).encode()
             headers["Content-Type"] = "application/json"
-        req = urllib.request.Request(CGI + path, data=data, headers=headers)
+        req = urllib.request.Request(
+            CGI + path, data=data, headers=headers,
+            method=method or ("POST" if data is not None else "GET"))
         try:
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 return json.loads(r.read().decode())
@@ -137,6 +140,55 @@ def status():
     d = api("/drive/v1/about?" + qs({"space": ""}))
     ok = d.get("kind") == "drive#about"
     return {"ready": ok, "about": d}
+
+
+def remove_tasks(ids):
+    """Delete task records — panel's own shape (verified live on the bundle):
+    DELETE drive/v1/tasks?space=<runner>&task_ids=<id>[&task_ids=<id>]"""
+    if isinstance(ids, str):
+        ids = [ids]
+    sp = runner_space()
+    q = "&".join("task_ids=" + urllib.parse.quote(str(i)) for i in ids if i)
+    return api("/drive/v1/tasks?space=%s&%s" % (urllib.parse.quote(sp), q),
+               method="DELETE")
+
+
+def _artifact_root():
+    return os.environ.get("XL_DOWNLOAD_DIR", "/xunlei/downloads")
+
+
+def cleanup(ids=None, with_files=True, limit=50):
+    """Remove task records and optionally their downloaded artifacts.
+
+    Completed tasks usually have params.real_path ("/downloads/<name>");
+    pending/error ones often have none — their record alone is removed.
+    Returns the per-task summaries that were processed."""
+    if ids:
+        done = []
+        for tid in ids:
+            t = task_by_id(tid)
+            if t:
+                done.append(t)
+    else:
+        done = list_tasks(limit).get("tasks", [])
+    removed = []
+    for t in done:
+        s = summary(t)
+        if with_files and s.get("path"):
+            rel = s["path"]
+            rel = rel[len("/downloads/"):] if rel.startswith("/downloads/") else rel.lstrip("/")
+            full = os.path.join(_artifact_root(), rel)
+            try:
+                if os.path.isdir(full):
+                    import shutil
+                    shutil.rmtree(full)
+                elif os.path.exists(full):
+                    os.remove(full)
+            except Exception as e:
+                print("artifact delete skipped:", full, e, file=sys.stderr)
+        remove_tasks([s["id"]])
+        removed.append(s)
+    return removed
 
 
 def add_task(url, name=None):
@@ -241,6 +293,13 @@ def mcp_server():
                         "no_wait": {"type": "boolean"}},
                     "required": ["url"]},
                  "description": "Submit a download URL; waits until COMPLETE/ERROR by default, returns {summary:{ok,phase,path,...}}; optional callback URL receives the same JSON via POST when done."},
+                {"name": "remove_task", "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "ids": {"type": "array", "items": {"type": "string"}},
+                        "keep_files": {"type": "boolean", "default": False}},
+                    "required": ["ids"]},
+                 "description": "Delete task records; keep_files=false (default) also removes downloaded artifacts on disk."},
             ]}})
         elif method == "tools/call":
             name = req.get("params", {}).get("name")
@@ -263,6 +322,11 @@ def mcp_server():
                         out = {"summary": s, "task": done}
                     else:
                         out = r
+                elif name == "remove_task":
+                    out = {"removed": cleanup(
+                        ids=args.get("ids") or None,
+                        with_files=not args.get("keep_files", False),
+                        limit=int(args.get("limit", 50)))}
                 else:
                     out = {"error": "unknown tool"}
             except Exception as e:
@@ -326,6 +390,26 @@ def serve(host="0.0.0.0", port=None):
                     return self._json(500, {"error": str(e)})
             return self._json(404, {"error": "not found", "routes": [
                 "/health", "/api/v1/tasks", "/api/v1/tasks/{id}", "POST /api/v1/tasks"]})
+
+        def do_DELETE(self):
+            if not self._authed():
+                return self._json(401, {"error": "bad X-API-KEY"})
+            q = urllib.parse.urlparse(self.path)
+            if q.path == "/api/v1/tasks":
+                try:
+                    out = cleanup(limit=int((urllib.parse.parse_qs(q.query).get("limit") or ["50"])[0]))
+                    return self._json(200, {"removed": out})
+                except Exception as e:
+                    return self._json(500, {"error": str(e)})
+            m = re.match(r"^/api/v1/tasks/([^/]+)$", q.path)
+            if m:
+                keep = (urllib.parse.parse_qs(q.query).get("keep_files") or ["0"])[0] != "1"
+                try:
+                    out = cleanup(ids=[m.group(1)], with_files=keep)
+                    return self._json(200, {"removed": out})
+                except Exception as e:
+                    return self._json(500, {"error": str(e)})
+            return self._json(404, {"error": "not found"})
 
         def do_POST(self):
             if not self._authed():
@@ -405,6 +489,14 @@ def cli(argv):
         if opts.get("callback"):
             notify(opts["callback"], s)
         print(json.dumps({"summary": s, "task": done}, ensure_ascii=False, indent=1))
+    elif cmd == "remove":
+        keep = "--keep-files" in rest
+        ids = [a for a in rest if not a.startswith("--")]
+        if ids:
+            out = cleanup(ids=ids, with_files=not keep)
+        else:
+            out = cleanup(with_files=not keep)
+        print(json.dumps({"removed": out}, ensure_ascii=False, indent=1))
     else:
         print("unknown command:", cmd)
         return 1

@@ -199,6 +199,11 @@ python3 xlmcp.py add https://example.com/file.zip --no-wait
 # push the result JSON to a callback endpoint when the task reaches a terminal state
 python3 xlmcp.py add https://example.com/file.zip --callback http://127.0.0.1:9911/done --deadline 300
 
+# delete task records (+ downloaded artifacts) — by ids, or all recent when none given
+python3 xlmcp.py remove VP1vXXXX YYYY
+python3 xlmcp.py remove                # whole recent list
+python3 xlmcp.py remove --keep-files   # records only, files stay on disk
+
 # REST front (see below), bind address override:
 python3 xlmcp.py serve --host 0.0.0.0
 
@@ -277,6 +282,24 @@ curl -s -X POST http://127.0.0.1:8787/api/v1/tasks \
 Errors are JSON: `500 {"error": "…"}`, `502` on failed `/health` probe,
 `401 {"error":"bad X-API-KEY"}` when the key is wrong, `404` on unknown routes.
 
+### `DELETE /api/v1/tasks/{id}`
+Remove one task record **and its downloaded artifact** (the file/dir under the
+download dir pointed by the task's `params.real_path`). Works for completed and
+failed/pending tasks alike; tasks without a `real_path` just lose the record.
+`?keep_files=1` removes only the record and keeps the file on disk.
+```bash
+curl -s -X DELETE http://127.0.0.1:8787/api/v1/tasks/VP1vAoajw3cYB24N5bv5U8ydA1
+# {"removed": [{"id":"...", "name":"...", "phase":"...", "path":"/downloads/...", ...}]}
+```
+
+### `DELETE /api/v1/tasks?limit=N`
+Bulk cleanup of the recent listing (default 50): every listed task gets the
+same record+artifact removal applied. Intended for housekeeping after a batch
+pipeline drained the queue.
+```bash
+curl -s -X DELETE 'http://127.0.0.1:8787/api/v1/tasks?limit=20'
+```
+
 ### Completion reporting for agents
 Two mechanisms, pick one:
 1. **Sync** — keep the POST open; read `summary.ok` (`true` ⇔
@@ -316,13 +339,14 @@ Serve over stdio for any MCP-compatible agent host:
 ```
 
 Implements `initialize`, `notifications/initialized`, `tools/list`,
-`tools/call`, ping-style fallback. Three tools:
+`tools/call`, ping-style fallback. Four tools:
 
 | Tool | Arguments | Behavior |
 |---|---|---|
 | `status` | — | Device readiness check. |
 | `list_tasks` | `{limit?: int=50}` | Recent tasks. |
 | `add_task` | `{url, name?, callback?, deadline?=600, no_wait?}` | Same semantics as REST POST: waits for COMPLETE/ERROR, returns `{summary, task}`; optional `callback` receives summary JSON via POST; `no_wait` returns `{summary:{id,phase:"submitted"}}`. |
+| `remove_task` | `{ids?, keep_files?, limit?=50}` | Delete task records and their downloaded artifacts. Explicit `ids` list or, when empty, the whole recent listing (`limit`). `keep_files:true` keeps files on disk. Returns `{removed:[summary…]}`. |
 
 Quick smoke test:
 ```bash
