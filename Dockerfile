@@ -1,31 +1,36 @@
-FROM --platform=${TARGETARCH} ubuntu:focal
+FROM --platform=${TARGETARCH} python:3.12-slim
 ARG TARGETARCH
-ENV DEBIAN_FRONTEND=noninteractive
 
+LABEL org.opencontainers.image.authors="redashes" \
+  org.opencontainers.image.source="https://github.com/redashes1984/xunlei" \
+  org.opencontainers.image.description="Thunder remote download + xlmcp headless bridge (REST API / CLI / MCP)" \
+  org.opencontainers.image.licenses="MIT"
+
+ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
   && apt-get install --no-install-recommends -y ca-certificates tzdata \
   && rm -rf /var/lib/apt/lists/* \
-  && mkdir -p /rootfs/etc/ssl/certs /rootfs/lib \
-  && find /usr/lib \( -name libdl.so.2 -o -name libgcc_s.so.1 -o -name libstdc++.so.6 \) -exec cp -Lr {} /rootfs/lib/ \; \
-  && cp -Lr /usr/share/zoneinfo/Asia/Chongqing /rootfs/etc/localtime \
-  && echo "Asia/Chongqing" >/rootfs/etc/timezone \
-  && cp -Lr --parents /etc/ssl/certs/ca-certificates.crt /rootfs/
+  && rm -f /etc/localtime \
+  && cp -Lr /usr/share/zoneinfo/Asia/Chongqing /etc/localtime \
+  && echo "Asia/Chongqing" > /etc/timezone
 
-COPY artifacts/xlp-${TARGETARCH} /rootfs/xlp
-RUN chmod +x /rootfs/xlp
+# panel binary (static, CGO_ENABLED=0) + xlmcp sidecar + supervisor entrypoint
+# chroot root is /xunlei — pre-seed it with the loader + libc so the
+# extracted xunlei-pan-cli launcher can exec inside the chroot.
+RUN mkdir -p /xunlei/lib /xunlei/lib64 /xunlei/usr && \
+  cp -aL /lib/. /xunlei/lib/ && \
+  if [ -d /lib64 ]; then cp -aL /lib64/. /xunlei/lib64/; fi && \
+  cp -a /usr/lib/. /xunlei/usr/lib/ && \
+  mkdir -p /xunlei/etc/ssl/certs && \
+  cp -L /etc/ssl/certs/ca-certificates.crt /xunlei/etc/ssl/certs/
 
-FROM --platform=${TARGETARCH} busybox:1.37
-ARG TARGETARCH
+COPY artifacts/xlp-${TARGETARCH} /xlp
+COPY xlmcp.py /xlmcp.py
+COPY docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /xlp /docker-entrypoint.sh
 
-LABEL org.opencontainers.image.authors=cnk3x \
-  org.opencontainers.image.source=https://github.com/cnk3x/xunlei \
-  org.opencontainers.image.description="迅雷远程下载服务(非官方)" \
-  org.opencontainers.image.licenses=MIT
-
-COPY --from=0 /rootfs /
-
-ENV \
-  XL_DASHBOARD_PORT=2345 \
+# panel env (names identical to cnk3x/xunlei upstream)
+ENV XL_DASHBOARD_PORT=2345 \
   XL_DASHBOARD_IP= \
   XL_DASHBOARD_USERNAME= \
   XL_DIR_DOWNLOAD=/xunlei/downloads \
@@ -33,9 +38,13 @@ ENV \
   XL_UID= \
   XL_GID= \
   XL_DEBUG= \
-  XL_SPK_URL=
+  XL_SPK_URL= \
+# xlmcp sidecar env
+  XL_HOST=127.0.0.1 \
+  XL_PORT=2345 \
+  XL_API_PORT=8787
 
-VOLUME [ "/xunlei/data", "/xunlei/var/packages/pan-xunlei-com" ]
-EXPOSE 2345
+VOLUME [ "/xunlei/data", "/xunlei/downloads" ]
+EXPOSE 2345 8787
 
-CMD [ "/xlp" ]
+ENTRYPOINT [ "/docker-entrypoint.sh" ]
