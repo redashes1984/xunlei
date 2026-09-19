@@ -145,130 +145,130 @@ services:
       - ./cache:/xunlei/var/packages/pan-xunlei-com
 ```
 
-# xlmcp — Headless bridge for the cnk3x/xunlei Docker panel
+# xlmcp — cnk3x/xunlei Docker 面板的无浏览器桥接
 
-Zero-dependency Python 3 sidecar (stdlib only) that drives the
-[cnk3x/xunlei](https://github.com/cnk3x/xunlei) Docker panel without a browser.
-Three surfaces: **CLI**, **Komga-style REST**, **MCP stdio server**.
+零依赖 Python 3 sidecar（仅标准库），无需浏览器即可驱动
+[cnk3x/xunlei](https://github.com/cnk3x/xunlei) Docker 面板。
+三个使用面：**CLI**、**Komga 风格 REST**、**MCP stdio 服务器**。
 
-The panel (`http://<host>:2345/webman/3rdparty/pan-xunlei-com/index.cgi`)
-normally needs a browser SPA session. xlmcp reproduces its auth chain directly:
+面板（`http://<host>:2345/webman/3rdparty/pan-xunlei-com/index.cgi`）
+正常情况下需要一个浏览器 SPA 会话。xlmcp 直接复刻其鉴权链：
 
-1. `GET /webman/login.cgi?enable_syno_token=yes` with Basic auth → `SynoToken`
-2. `GET <panel>/` → scrape the embedded JWT from the HTML
-3. Call CGI paths directly with headers `pan-auth: <jwt>` + `x-syno-token` + Basic
+1. `GET /webman/login.cgi?enable_syno_token=yes` + Basic 认证 → `SynoToken`
+2. `GET <panel>/` → 从 HTML 中提取内嵌 JWT
+3. 携带 `pan-auth: <jwt>` + `x-syno-token` + Basic 头，直接调用 CGI 路径
 
-> Note: the `device/v1/fetch` proxy enforces a URL allowlist and rejects most
-> absolute URLs ("url not allowed") — bypass it and hit relative CGI paths directly.
+> 说明：`device/v1/fetch` 代理带有 URL 白名单，多数绝对地址会被拒绝
+> （返回 "url not allowed"）——绕过它，直接请求相对 CGI 路径即可。
 
-## Requirements
+## 依赖要求
 
-- Python ≥ 3.8 (stdlib only; no pip installs)
-- A running cnk3x/xunlei container
+- Python ≥ 3.8（仅标准库，无需 pip 安装任何东西）
+- 一个运行中的 cnk3x/xunlei 容器
 
-## Configuration (environment variables)
+## 配置（环境变量）
 
-| Variable | Purpose | Default |
+| 变量 | 用途 | 默认值 |
 |---|---|---|
-| `XL_URL` | Full panel base URL. Highest priority — overrides HOST/PORT entirely. | — |
-| `XL_HOST` | Panel host only (used when `XL_URL` unset). | `10.10.4.21` |
-| `XL_PORT` | Panel port only (used when `XL_URL` unset). | `2345` |
-| `XL_USER` | Panel Basic-auth username. | `bdm965` |
-| `XL_PASS` | Panel Basic-auth password. | `189810bdm` |
-| `XL_API_PORT` | REST listen port for `serve`. | `8787` |
-| `XL_API_KEY` | Shared secret for the REST front (checked against `X-API-KEY` header). Empty ⇒ auth off. | `""` |
+| `XL_URL` | 完整的面板基础 URL，优先级最高，直接覆盖 HOST/PORT | — |
+| `XL_HOST` | 仅面板主机（`XL_URL` 未设置时生效） | `10.10.4.21` |
+| `XL_PORT` | 仅面板端口（`XL_URL` 未设置时生效） | `2345` |
+| `XL_USER` | 面板 Basic 认证用户名 | `bdm965` |
+| `XL_PASS` | 面板 Basic 认证密码 | `189810bdm` |
+| `XL_API_PORT` | `serve` 模式的 REST 监听端口 | `8787` |
+| `XL_API_KEY` | REST 面的共享密钥（校验 `X-API-KEY` 请求头），留空即关闭鉴权 | `""` |
 
-Base URL resolution: `XL_URL` > `XL_HOST`/`XL_PORT`. If neither set:
-`http://10.10.4.21:2345/webman/3rdparty/pan-xunlei-com/index.cgi`.
+基础 URL 解析顺序：`XL_URL` > `XL_HOST`/`XL_PORT`。两者都未设置时默认：
+`http://10.10.4.21:2345/webman/3rdparty/pan-xunlei-com/index.cgi`。
 
 ## CLI
 
 ```bash
-# device readiness (prints {"ready": true, "about": {...}})
+# 设备就绪检查（输出 {"ready": true, "about": {...}}）
 python3 xlmcp.py status
 
-# recent download tasks
+# 列出最近的下载任务
 python3 xlmcp.py list --limit 20
 
-# submit a download, wait until COMPLETE/ERROR (default deadline 600s)
+# 提交下载并等待 COMPLETE/ERROR（默认等待上限 600 秒）
 python3 xlmcp.py add https://example.com/file.zip --name mypack
 
-# fire-and-forget: return immediately with the task id
+# fire-and-forget：立刻返回任务 id，不等待
 python3 xlmcp.py add https://example.com/file.zip --no-wait
 
-# push the result JSON to a callback endpoint when the task reaches a terminal state
+# 任务到达终态后，把结果 JSON POST 给 callback 回调地址
 python3 xlmcp.py add https://example.com/file.zip --callback http://127.0.0.1:9911/done --deadline 300
 
-# delete task records (+ downloaded artifacts) — by ids, or all recent when none given
+# 删除任务记录（连同下载产物）：按 id 删，不带 id 则清理整个近期列表
 python3 xlmcp.py remove VP1vXXXX YYYY
-python3 xlmcp.py remove                # whole recent list
-python3 xlmcp.py remove --keep-files   # records only, files stay on disk
+python3 xlmcp.py remove                # 清空近期列表
+python3 xlmcp.py remove --keep-files   # 只删记录，文件留在磁盘上
+python3 xlmcp.py remove --limit 100    # 批量清理的窗口大小
 
-# REST front (see below), bind address override:
+# REST 服务（见下文），可覆盖绑定地址：
 python3 xlmcp.py serve --host 0.0.0.0
 
-# MCP stdio server (see below)
+# MCP stdio 服务器（见下文）
 python3 xlmcp.py --mcp
 
-# help
+# 帮助
 python3 xlmcp.py help
 ```
 
-`add` options: `--name NAME` (file/stem name; default = last URL path segment
-minus query), `--callback URL`, `--deadline SEC` (default 600), `--no-wait`.
+`add` 的参数：`--name NAME`（文件名/词干，默认取 URL 最后一段并去掉查询串）、
+`--callback URL`、`--deadline SEC`（默认 600）、`--no-wait`。
 
-On success the CLI prints a compact summary — branch on `ok`:
+成功后 CLI 打印紧凑摘要——用 `ok` 字段分支判断：
 
 ```json
 {
  "summary": {"id": "VP1v...", "name": "mypack", "phase": "PHASE_TYPE_COMPLETE",
              "ok": true, "message": "完成", "path": "/downloads/mypack", "size": "16958"},
- "task": {...full Thunder task object...}
+ "task": {...完整的迅雷任务对象...}
 }
 ```
 
-With `--no-wait` only `{"summary": {"id": ..., "phase": "submitted"}}` is printed.
+带 `--no-wait` 时只输出 `{"summary": {"id": ..., "phase": "submitted"}}`。
 
 ## REST API
 
-Start the server: `python3 xlmcp.py serve` (binds `XL_API_PORT`, default 8787).
-When `XL_API_KEY` is set, every request must carry `X-API-KEY: <key>`; empty
-key means auth off (banner announces `auth=off` at startup).
+启动服务：`python3 xlmcp.py serve`（监听 `XL_API_PORT`，默认 8787）。
+设置了 `XL_API_KEY` 时，每个请求必须携带 `X-API-KEY: ***
+key 为空即关闭鉴权（启动横幅会打印 `auth=off`）。
 
 ### `GET /health`
-Liveness + panel readiness.
+存活检查 + 面板就绪状态。
 ```bash
 curl -s http://127.0.0.1:8787/health
 # {"ok": true, "ready": true, "about": {"kind": "drive#about", ...}}
 ```
 
 ### `GET /api/v1/tasks?limit=N`
-List recent download tasks (Thunder `drive#task` objects). Invalid `limit`
-falls back to 50 rather than dropping the connection.
+列出最近的下载任务（迅雷 `drive#task` 对象）。`limit` 非法时回落为 50，
+而不是断开连接。
 ```bash
 curl -s 'http://127.0.0.1:8787/api/v1/tasks?limit=20'
 ```
 
 ### `GET /api/v1/tasks/{id}`
-Fetch one task by id. Lookup scans the most recent listed window only — ids
-are not durable once a task ages out. Returns `{}` when not found.
+按 id 查询单个任务。查找只扫描最近的列表窗口——任务老化出窗后 id 即失效。
+查不到返回 `{}`。
 ```bash
 curl -s http://127.0.0.1:8787/api/v1/tasks/VP1vAoajw3cYB24N5bv5U8ydA1
 ```
 
 ### `POST /api/v1/tasks`
-Submit a download. Blocks until COMPLETE/ERROR by default; returns
-`{"summary": {...}, "task": {...}}`.
+提交下载。默认阻塞直到 COMPLETE/ERROR，返回
+`{"summary": {...}, "task": {...}}`。
 
-Body fields — `url` (required); optional `name`, `callback`, `deadline`
-(seconds, default 600), `no_wait` (bool):
+请求体字段——`url`（必填）；可选 `name`、`callback`、`deadline`
+（秒，默认 600）、`no_wait`（布尔）：
 ```bash
 curl -s -X POST http://127.0.0.1:8787/api/v1/tasks \
   -H 'Content-Type: application/json' \
   -d '{"url":"https://www.baidu.com/favicon.ico","name":"probe"}'
 
-# asynchronous: don't hold the HTTP connection — the summary JSON is POSTed
-# to `callback` when the task finishes
+# 异步：不挂住 HTTP 连接——任务完成后把摘要 JSON POST 给 callback
 curl -s -X POST http://127.0.0.1:8787/api/v1/tasks \
   -H 'Content-Type: application/json' \
   -d '{"url":"https://…/file.zip","callback":"http://collector:9911/done","deadline":900}'
@@ -279,40 +279,36 @@ curl -s -X POST http://127.0.0.1:8787/api/v1/tasks \
   -d '{"url":"https://…/file.zip","no_wait":true}'
 ```
 
-Errors are JSON: `500 {"error": "…"}`, `502` on failed `/health` probe,
-`401 {"error":"bad X-API-KEY"}` when the key is wrong, `404` on unknown routes.
+错误均为 JSON：`500 {"error": "…"}`、`/health` 探测失败 `502`、
+密钥不对 `401 {"error":"bad X-API-KEY"}`、未知路由 `404`。
 
 ### `DELETE /api/v1/tasks/{id}`
-Remove one task record **and its downloaded artifact** (the file/dir under the
-download dir pointed by the task's `params.real_path`). Works for completed and
-failed/pending tasks alike; tasks without a `real_path` just lose the record.
-`?keep_files=1` removes only the record and keeps the file on disk.
+删除一条任务记录**及其下载产物**（即任务 `params.real_path` 指向的、下载目录下对应的文件／目录）。
+已完成和失败/挂起态任务都适用；没有 `real_path` 的任务只删记录。
+`?keep_files=1` 表示只删记录、保留磁盘上的文件。
 ```bash
 curl -s -X DELETE http://127.0.0.1:8787/api/v1/tasks/VP1vAoajw3cYB24N5bv5U8ydA1
 # {"removed": [{"id":"...", "name":"...", "phase":"...", "path":"/downloads/...", ...}]}
 ```
 
 ### `DELETE /api/v1/tasks?limit=N`
-Bulk cleanup of the recent listing (default 50): every listed task gets the
-same record+artifact removal applied. Intended for housekeeping after a batch
-pipeline drained the queue. Supports `?keep_files=1` like the single-id route.
+批量清理近期列表（默认 50）：对列表中每条任务执行同样的「记录+产物」删除。
+适合批量管线跑完后的收尾清理。与单条路由一致，同样支持 `?keep_files=1`。
 ```bash
 curl -s -X DELETE 'http://127.0.0.1:8787/api/v1/tasks?limit=20'
 curl -s -X DELETE 'http://127.0.0.1:8787/api/v1/tasks?limit=20&keep_files=1'
 ```
 
-### Completion reporting for agents
-Two mechanisms, pick one:
-1. **Sync** — keep the POST open; read `summary.ok` (`true` ⇔
-   `phase == PHASE_TYPE_COMPLETE`) when it returns. Typical latency for a
-   small file: ≈6 s.
-2. **Async callback** — set `"callback":"http://…"`. The sidecar POSTs the
-   summary JSON (`{id,name,phase,ok,message,path,size}`) to that URL once the
-   task reaches a terminal state, best-effort (failures logged to stderr).
-   On timeout the summary carries `"phase":"TIMEOUT"`.
+### 供 Agent 使用的完成回报
+两种机制，任选其一：
+1. **同步**——保持 POST 连接；返回时读 `summary.ok`
+   （`true` ⇔ `phase == PHASE_TYPE_COMPLETE`）。小文件典型延迟 ≈6 秒。
+2. **异步回调**——设置 `"callback":"http://…"`。任务到达终态后，sidecar
+   把摘要 JSON（`{id,name,phase,ok,message,path,size}`）POST 到该 URL，
+   best-effort（失败记入 stderr）。超时时摘要带 `"phase":"TIMEOUT"`。
 
-### Running as a service
-Example systemd unit:
+### 作为服务常驻
+systemd unit 示例：
 ```ini
 [Unit]
 Description=xlmcp Thunder bridge
@@ -327,9 +323,9 @@ Restart=on-failure
 WantedBy=multi-user.target
 ```
 
-## MCP server
+## MCP 服务器
 
-Serve over stdio for any MCP-compatible agent host:
+以 stdio 方式对任何支持 MCP 的 Agent 宿主提供服务：
 
 ```json
 {
@@ -339,33 +335,30 @@ Serve over stdio for any MCP-compatible agent host:
 }
 ```
 
-Implements `initialize`, `notifications/initialized`, `tools/list`,
-`tools/call`, ping-style fallback. Four tools:
+实现了 `initialize`、`notifications/initialized`、`tools/list`、
+`tools/call`，并有 ping 风格兜底。共四个工具：
 
-| Tool | Arguments | Behavior |
+| 工具 | 参数 | 行为 |
 |---|---|---|
-| `status` | — | Device readiness check. |
-| `list_tasks` | `{limit?: int=50}` | Recent tasks. |
-| `add_task` | `{url, name?, callback?, deadline?=600, no_wait?}` | Same semantics as REST POST: waits for COMPLETE/ERROR, returns `{summary, task}`; optional `callback` receives summary JSON via POST; `no_wait` returns `{summary:{id,phase:"submitted"}}`. |
-| `remove_task` | `{ids?, keep_files?, limit?=50}` | Delete task records and their downloaded artifacts. Explicit `ids` list or, when empty, the whole recent listing (`limit`). `keep_files:true` keeps files on disk. Returns `{removed:[summary…]}`. |
+| `status` | — | 设备就绪检查。 |
+| `list_tasks` | `{limit?: int=50}` | 最近任务列表。 |
+| `add_task` | `{url, name?, callback?, deadline?=600, no_wait?}` | 语义同 REST POST：等待 COMPLETE/ERROR，返回 `{summary, task}`；可选 `callback` 以 POST 接收摘要 JSON；`no_wait` 返回 `{summary:{id,phase:"submitted"}}`。 |
+| `remove_task` | `{ids?, keep_files?, limit?=50}` | 删除任务记录及下载产物。给定 `ids` 列表逐条删除；省略或传 `[]` 则清理近期列表（窗口 `limit`）。`keep_files:true` 保留磁盘文件。返回 `{removed:[摘要…]}`。 |
 
-Quick smoke test:
+快速冒烟测试：
 ```bash
 echo '{"jsonrpc":"2.0","id":1,"method":"initialize"}' | python3 xlmcp.py --mcp
 echo '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' | python3 xlmcp.py --mcp
 echo '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"add_task","arguments":{"url":"https://www.baidu.com/favicon.ico","name":"mcp-probe"}}}' | python3 xlmcp.py --mcp
 ```
 
-## Implementation notes
+## 实现要点
 
-- **Token cache self-healing**: JWT/SynoToken are cached per process; if the
-  panel rotates them (restart/redeploy), the next failing `api()` call drops
-  the cache and re-fetches once — long-lived `serve` processes recover without
-  a manual restart.
-- **Task visibility lag**: the empty-space Thunder listing lags minutes behind
-  new tasks; `task_by_id` therefore queries the runner-space-scoped listing
-  first (`space=device_id#…`), then falls back to the empty-space one. This is
-  what makes sync completion reports arrive in seconds instead of minutes.
-- **`params.target` pitfall**: must be the runner's real `device_id` (read from
-  a `user#runner` task's `params.target`). The literal `"downloads"` leaves
-  tasks stuck in `PHASE_TYPE_PENDING` forever.
+- **令牌缓存自愈**：JWT/SynoToken 按进程缓存；面板轮换令牌（重启/重新部署）后，
+  下一次失败的 `api()` 调用会丢弃缓存并重取一次——常驻的 `serve` 进程无需手动重启即可恢复。
+- **任务可见性延迟**：空 space 的迅雷列表对新任务滞后数分钟；因此 `task_by_id`
+  先查 runner space 作用域的列表（`space=device_id#…`），再回落查空 space 列表。
+  这是同步完成回报能在几秒而不是几分钟内到达的原因。
+- **`params.target` 陷阱**：必须是 runner 的真实 `device_id`（从 `user#runner`
+  任务的 `params.target` 读取）。写字面量 `"downloads"` 会让任务永远卡在
+  `PHASE_TYPE_PENDING`。
