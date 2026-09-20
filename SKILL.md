@@ -25,7 +25,7 @@ Pick whichever your host supports; semantics are identical across surfaces.
 |---|---|---|
 | `XL_URL` | Full panel base URL (highest priority) | — |
 | `XL_HOST` / `XL_PORT` | Host/port when `XL_URL` unset | `10.10.4.21` / `2345` |
-| `XL_USER` / `XL_PASS` | Panel Basic auth | bdm965 (see CREDENTIALS.md) |
+| `XL_USER` / `XL_PASS` | Panel Basic auth | set at deploy time (see CREDENTIALS.md) |
 | `XL_API_PORT` | REST listen port | `8787` |
 | `XL_API_KEY` | REST shared secret, empty = auth off | `""` |
 
