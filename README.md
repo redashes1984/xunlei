@@ -178,8 +178,8 @@ services:
 | `XL_URL` | 完整的面板基础 URL，优先级最高，直接覆盖 HOST/PORT | — |
 | `XL_HOST` | 仅面板主机（`XL_URL` 未设置时生效） | `10.10.4.21` |
 | `XL_PORT` | 仅面板端口（`XL_URL` 未设置时生效） | `2345` |
-| `XL_USER` | 面板 Basic 认证用户名 | `bdm965` |
-| `XL_PASS` | 面板 Basic 认证密码 | `189810bdm` |
+| `XL_USER` | 面板 Basic 认证用户名 | (自己的账号名) |
+| `XL_PASS` | 面板 Basic 认证密码 | (自己的密码) |
 | `XL_API_PORT` | `serve` 模式的 REST 监听端口 | `8787` |
 | `XL_API_KEY` | REST 面的共享密钥（校验 `X-API-KEY` 请求头），留空即关闭鉴权 | `""` |
 
