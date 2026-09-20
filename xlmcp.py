@@ -46,8 +46,8 @@ def _base():
 
 CGI = _base()
 CRED = "%s:%s" % (
-    os.environ.get("XL_USER", "bdm965"),
-    os.environ.get("XL_PASS", "189810bdm"),
+    os.environ.get("XL_USER", ""),
+    os.environ.get("XL_PASS", ""),
 )
 _BASIC = "Basic " + base64.b64encode(CRED.encode()).decode()
 
